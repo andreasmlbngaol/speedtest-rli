@@ -90,17 +90,18 @@ Usage
     Usage: speedtest-rli [OPTIONS]
 
     Options:
+      -v, --version                        Print version [alias: -V]
           --no-download                    Do not perform download test
           --no-upload                      Do not perform upload test
-          --single                         Only use a single connection instead of multiple
-          --bytes                          Display values in bytes instead of bits
-          --share                          Generate and provide a URL to the speedtest.net share results image
+      -s, --single                         Only use a single connection instead of multiple
+      -b, --bits                           Display values in bits instead of bytes (default is bytes, MB/s)
+      -S, --share                          Generate and provide a URL to the speedtest.net share results image
           --simple                         Suppress verbose output, only show basic information
           --csv                            Suppress verbose output, only show basic information in CSV format
           --csv-delimiter <CSV_DELIMITER>  Single character delimiter to use in CSV output. Default "," [default: ,]
           --csv-header                     Print CSV headers
           --json                           Suppress verbose output, only show basic information in JSON format
-          --list                           Display a list of speedtest.net servers sorted by distance
+      -l, --list                           Display a list of speedtest.net servers sorted by distance
           --server <ID>                    Specify a server ID to test against. Can be supplied multiple times
           --exclude <ID>                   Exclude a server from selection. Can be supplied multiple times
           --mini <MINI>                    URL of the Speedtest Mini server
@@ -110,7 +111,6 @@ Usage
           --no-pre-allocate                Do not pre allocate upload data
           --debug                          Show verbose debug output
       -h, --help                           Print help
-      -V, --version                        Print version
 
 Examples
 --------
