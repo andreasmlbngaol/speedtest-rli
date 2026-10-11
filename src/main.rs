@@ -191,11 +191,11 @@ fn run(args: Args) -> Result<(), String> {
 
     if !args.no_download {
         if !quiet {
-            print!("Testing download speed");
             use std::io::Write;
+            print!("Testing download speed");
             std::io::stdout().flush().ok();
         }
-        let progress = progress_dots(quiet);
+        let progress = live_progress("Testing download speed", as_bytes, quiet);
         let (bytes, secs) = transfer::download(&client, &cfg, &results.server, threads, progress);
         results.bytes_received = bytes;
         results.download = if secs > 0.0 {
@@ -212,11 +212,11 @@ fn run(args: Args) -> Result<(), String> {
 
     if !args.no_upload {
         if !quiet {
-            print!("Testing upload speed");
             use std::io::Write;
+            print!("Testing upload speed");
             std::io::stdout().flush().ok();
         }
-        let progress = progress_dots(quiet);
+        let progress = live_progress("Testing upload speed", as_bytes, quiet);
         let (bytes, secs) = transfer::upload(&client, &cfg, &results.server, threads, progress);
         results.bytes_sent = bytes;
         results.upload = if secs > 0.0 {
@@ -304,13 +304,26 @@ fn unit(as_bytes: bool) -> &'static str {
     }
 }
 
-/// A callback that prints one dot per completed transfer, unless quiet.
-fn progress_dots(quiet: bool) -> impl Fn() + Send + Sync + 'static {
-    move || {
-        if !quiet {
-            use std::io::Write;
-            print!(".");
-            std::io::stdout().flush().ok();
+/// A callback that rewrites the current line with a live speed estimate.
+/// `bytes` is the cumulative byte count reported by the transfer thread.
+fn live_progress(
+    label: &'static str,
+    as_bytes: bool,
+    quiet: bool,
+) -> impl Fn(u64) + Send + Sync + 'static {
+    let start = std::time::Instant::now();
+    move |bytes: u64| {
+        if quiet {
+            return;
         }
+        let secs = start.elapsed().as_secs_f64();
+        let speed = if secs > 0.0 {
+            mbits(bytes as f64 / secs * 8.0, as_bytes)
+        } else {
+            0.0
+        };
+        use std::io::Write;
+        print!("\r{label}  [{speed:>7.2} M{}/s]", unit(as_bytes));
+        std::io::stdout().flush().ok();
     }
 }

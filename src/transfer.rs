@@ -1,8 +1,7 @@
 //! Multithreaded download and upload tests.
 
 use std::io::Read;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -20,42 +19,52 @@ fn dirname(url: &str) -> String {
 
 /// Run `work` across at most `max_threads` workers, returning the summed
 /// `u64` results. Work items are pulled from a shared atomic counter.
-/// `progress` runs once per completed job.
-fn run_pool<F, P>(jobs: usize, max_threads: usize, work: F, progress: P) -> u64
+fn run_pool<F>(jobs: usize, max_threads: usize, work: F) -> u64
 where
     F: Fn(usize) -> u64 + Send + Sync + 'static,
-    P: Fn() + Send + Sync + 'static,
 {
     let threads = max_threads.max(1).min(jobs.max(1));
     let next = Arc::new(AtomicUsize::new(0));
     let work = Arc::new(work);
-    let progress = Arc::new(progress);
-    let (tx, rx) = mpsc::channel();
 
     let handles: Vec<_> = (0..threads)
         .map(|_| {
             let next = Arc::clone(&next);
             let work = Arc::clone(&work);
-            let progress = Arc::clone(&progress);
-            let tx = tx.clone();
-            std::thread::spawn(move || loop {
-                let i = next.fetch_add(1, Ordering::Relaxed);
-                if i >= jobs {
-                    break;
+            std::thread::spawn(move || {
+                let mut total = 0u64;
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= jobs {
+                        break;
+                    }
+                    total += work(i);
                 }
-                let result = work(i);
-                progress();
-                tx.send(result).ok();
+                total
             })
         })
         .collect();
-    drop(tx);
 
-    let total: u64 = rx.iter().sum();
-    for h in handles {
-        h.join().ok();
-    }
-    total
+    handles.into_iter().filter_map(|h| h.join().ok()).sum()
+}
+
+/// Spawn a thread that calls `progress(cumulative_bytes)` every 100 ms until
+/// the returned flag is set, then makes one final call. Keeps the readout
+/// live even while a single long request is in flight.
+fn with_ticker(
+    total: Arc<AtomicU64>,
+    progress: impl Fn(u64) + Send + Sync + 'static,
+) -> (Arc<AtomicBool>, std::thread::JoinHandle<()>) {
+    let done = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&done);
+    let handle = std::thread::spawn(move || {
+        while !flag.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(100));
+            progress(total.load(Ordering::Relaxed));
+        }
+        progress(total.load(Ordering::Relaxed));
+    });
+    (done, handle)
 }
 
 /// Download test. Returns bytes received and elapsed seconds.
@@ -64,7 +73,7 @@ pub fn download(
     cfg: &Config,
     server: &Server,
     threads: Option<usize>,
-    progress: impl Fn() + Send + Sync + 'static,
+    progress: impl Fn(u64) + Send + Sync + 'static,
 ) -> (u64, f64) {
     let base = dirname(&server.url);
     let mut urls = Vec::new();
@@ -77,17 +86,19 @@ pub fn download(
     let max_threads = threads.unwrap_or(cfg.download_threads);
     let window = Duration::from_secs(cfg.download_length);
     let start = Instant::now();
+    let total = Arc::new(AtomicU64::new(0));
 
     let jobs = urls.len();
     let client = client.clone();
-    let bytes = run_pool(
+    let counter = Arc::clone(&total);
+    let (done, ticker) = with_ticker(Arc::clone(&total), progress);
+    run_pool(
         jobs,
         max_threads,
         move |i| {
             let url = urls[i].clone();
             let client = client.clone();
-            let start = start;
-            let window = window;
+            let counter = Arc::clone(&counter);
             let mut got = 0u64;
             if start.elapsed() > window {
                 return 0;
@@ -101,18 +112,22 @@ pub fn download(
                     }
                     match resp.read(&mut buf) {
                         Ok(0) => break,
-                        Ok(n) => got += n as u64,
+                        Ok(n) => {
+                            got += n as u64;
+                            counter.fetch_add(n as u64, Ordering::Relaxed);
+                        }
                         Err(_) => break,
                     }
                 }
             }
             got
         },
-        progress,
     );
+    done.store(true, Ordering::Relaxed);
+    ticker.join().ok();
 
     let elapsed = start.elapsed().as_secs_f64();
-    (bytes, elapsed)
+    (total.load(Ordering::Relaxed), elapsed)
 }
 
 /// Upload test. Returns bytes sent and elapsed seconds.
@@ -121,7 +136,7 @@ pub fn upload(
     cfg: &Config,
     server: &Server,
     threads: Option<usize>,
-    progress: impl Fn() + Send + Sync + 'static,
+    progress: impl Fn(u64) + Send + Sync + 'static,
 ) -> (u64, f64) {
     let mut sizes = Vec::new();
     for size in &cfg.upload_sizes {
@@ -135,9 +150,12 @@ pub fn upload(
     let window = Duration::from_secs(cfg.upload_length);
     let url = server.url.clone();
     let start = Instant::now();
+    let total = Arc::new(AtomicU64::new(0));
 
     let client = client.clone();
-    let bytes = run_pool(
+    let counter = Arc::clone(&total);
+    let (done, ticker) = with_ticker(Arc::clone(&total), progress);
+    run_pool(
         jobs,
         max_threads,
         move |i| {
@@ -149,15 +167,19 @@ pub fn upload(
             }
             let body = upload_body(size);
             match client.post(&url).body(body).send() {
-                Ok(_) => size,
+                Ok(_) => {
+                    counter.fetch_add(size, Ordering::Relaxed);
+                    size
+                }
                 Err(_) => 0,
             }
         },
-        progress,
     );
+    done.store(true, Ordering::Relaxed);
+    ticker.join().ok();
 
     let elapsed = start.elapsed().as_secs_f64();
-    (bytes, elapsed)
+    (total.load(Ordering::Relaxed), elapsed)
 }
 
 /// Build the `content1=<repeated chars>` payload of exactly `size` bytes.
