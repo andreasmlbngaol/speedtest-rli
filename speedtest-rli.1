@@ -1,8 +1,8 @@
-.TH "speedtest-cli" 1 "2018-01-05" "speedtest-cli"
+.TH "speedtest-rli" 1 "2018-01-05" "speedtest-rli"
 .SH NAME
-speedtest\-cli \- Command line interface for testing internet bandwidth using speedtest.net
+speedtest\-rli \- Command line interface for testing internet bandwidth using speedtest.net
 .SH SYNOPSIS
-.B speedtest\-cli
+.B speedtest\-rli
 [OPTION...]
 .SH DESCRIPTION
 Speedtest.net is a web service for testing your broadband connection by downloading a file
@@ -12,7 +12,7 @@ from the command line.
 Speedtest mini is a version of the Speedtest.net server that you can host locally.
 
 .SH OPTIONS
-Usage: speedtest\-cli [OPTION...]
+Usage: speedtest\-rli [OPTION...]
 
 .B Help Options
 
@@ -122,22 +122,23 @@ Show the version number and exit
 
 \fBAutomatically find closest server and start testing\fR
 .RS
-speedtest\-cli
+speedtest\-rli
 .RE
 
 \fBSpecify testing against server 1491\fR
 .RS
-speedtest-cli \-\-server 1491
+speedtest-rli \-\-server 1491
 .RE
 
 \fBTesting against Speedtest Mini\fR
 .RS
-speedtest-cli \-\-mini 172.18.66.1
+speedtest-rli \-\-mini 172.18.66.1
 .RE
 
 .SH REPORTING BUGS
-Please file issues on the Github bug tracker: https://github.com/sivel/speedtest\-cli
+Please file issues on the Github bug tracker: https://github.com/andreasmlbngaol/speedtest-rli
 
 .SH AUTHORS
 This manual page was written by Jonathan Carter <jonathan@ubuntu.com>
-Speedtest\-cli was written by Matt Martz <matt@sivel.net>
+Original speedtest-cli was written by Matt Martz <matt@sivel.net>
+speedtest-rli is a Rust rewrite by Andreas.

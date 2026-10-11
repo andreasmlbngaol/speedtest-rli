@@ -1,0 +1,12 @@
+speedtest-rli
+Copyright 2026 Andreas <andreasmlbngaol>
+
+This product is a Rust rewrite of speedtest-cli.
+
+Original work: speedtest-cli
+Copyright 2012 Matt Martz
+https://github.com/sivel/speedtest-cli
+Licensed under the Apache License, Version 2.0.
+
+This project contains modifications and a full reimplementation in Rust.
+It is distributed under the Apache License, Version 2.0. See LICENSE.

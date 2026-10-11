@@ -1,0 +1,25 @@
+[package]
+name = "speedtest-rli"
+version = "0.1.1"
+edition = "2024"
+description = "Command line interface for testing internet bandwidth using speedtest.net"
+license = "Apache-2.0"
+repository = "https://github.com/andreasmlbngaol/speedtest-rli"
+homepage = "https://github.com/andreasmlbngaol/speedtest-rli"
+readme = "README.rst"
+
+[[bin]]
+name = "speedtest-rli"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "gzip", "rustls-tls"] }
+roxmltree = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+md5 = "0.7"
+
+[profile.release]
+lto = true
+strip = true
