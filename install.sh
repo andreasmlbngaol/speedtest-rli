@@ -1,10 +1,11 @@
 #!/bin/sh
-# speedtest-rli installer for Linux and macOS.
+# speedtest installer for Linux and macOS.
 # Usage: curl -fsSL https://github.com/andreasmlbngaol/speedtest-rli/releases/latest/download/install.sh | sh
 set -eu
 
 REPO="andreasmlbngaol/speedtest-rli"
-BIN="speedtest-rli"
+BIN="speedtest"
+ALIAS="speedtest-rli"
 BASE="https://github.com/$REPO/releases/latest/download"
 
 os=$(uname -s)
@@ -35,6 +36,8 @@ mkdir -p "$dir"
 echo "Downloading $asset..."
 curl -fsSL "$BASE/$asset" -o "$dir/$BIN"
 chmod +x "$dir/$BIN"
+# Keep the old name working too, in case scripts call speedtest-rli.
+ln -sf "$BIN" "$dir/$ALIAS"
 
 echo "Installed: $dir/$BIN"
 

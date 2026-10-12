@@ -970,7 +970,7 @@ dependencies = [
 
 [[package]]
 name = "speedtest-rli"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "clap",
  "md5",

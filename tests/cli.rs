@@ -6,13 +6,13 @@
 
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_speedtest-rli");
+const BIN: &str = env!("CARGO_BIN_EXE_speedtest");
 
 fn run(args: &[&str]) -> std::process::Output {
     Command::new(BIN)
         .args(args)
         .output()
-        .expect("failed to run speedtest-rli")
+        .expect("failed to run speedtest")
 }
 
 #[test]
@@ -20,7 +20,7 @@ fn version_flag_prints_name_and_version() {
     let out = run(&["--version"]);
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("speedtest-rli"), "got: {stdout}");
+    assert!(stdout.contains("speedtest"), "got: {stdout}");
     assert!(stdout.contains(env!("CARGO_PKG_VERSION")), "got: {stdout}");
 }
 

@@ -15,7 +15,7 @@ use servers::Server;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "speedtest-rli",
+    name = "speedtest",
     version = env!("CARGO_PKG_VERSION"),
     about = "Command line interface for testing internet bandwidth using speedtest.net",
     long_about = None,

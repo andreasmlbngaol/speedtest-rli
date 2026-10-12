@@ -1,15 +1,15 @@
 [package]
 name = "speedtest-rli"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 description = "Command line interface for testing internet bandwidth using speedtest.net"
 license = "Apache-2.0"
 repository = "https://github.com/andreasmlbngaol/speedtest-rli"
 homepage = "https://github.com/andreasmlbngaol/speedtest-rli"
-readme = "README.rst"
+readme = "README.md"
 
 [[bin]]
-name = "speedtest-rli"
+name = "speedtest"
 path = "src/main.rs"
 
 [dependencies]

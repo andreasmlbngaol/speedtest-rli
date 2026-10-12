@@ -53,11 +53,11 @@ jobs:
 
       - name: Rename binary (unix)
         if: matrix.os != 'windows-latest'
-        run: cp target/${{ matrix.target }}/release/speedtest-rli ${{ matrix.asset }}
+        run: cp target/${{ matrix.target }}/release/speedtest ${{ matrix.asset }}
 
       - name: Rename binary (windows)
         if: matrix.os == 'windows-latest'
-        run: copy target\${{ matrix.target }}\release\speedtest-rli.exe ${{ matrix.asset }}
+        run: copy target\${{ matrix.target }}\release\speedtest.exe ${{ matrix.asset }}
 
       - name: Upload to release
         uses: softprops/action-gh-release@v3

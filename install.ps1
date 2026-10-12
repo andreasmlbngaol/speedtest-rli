@@ -1,4 +1,4 @@
-# speedtest-rli installer for Windows.
+# speedtest installer for Windows.
 # Usage: irm https://github.com/andreasmlbngaol/speedtest-rli/releases/latest/download/install.ps1 | iex
 $ErrorActionPreference = 'Stop'
 
@@ -7,10 +7,12 @@ $url  = "https://github.com/$repo/releases/latest/download/speedtest-rli-windows
 
 $dir = Join-Path $env:LOCALAPPDATA 'speedtest-rli'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-$exe = Join-Path $dir 'speedtest-rli.exe'
+$exe = Join-Path $dir 'speedtest.exe'
 
-Write-Host "Downloading speedtest-rli..."
+Write-Host "Downloading speedtest..."
 Invoke-WebRequest -Uri $url -OutFile $exe
+# Keep the old name working too, in case scripts call speedtest-rli.
+Copy-Item -Path $exe -Destination (Join-Path $dir 'speedtest-rli.exe') -Force
 
 # Add the install folder to the *user* PATH (no admin rights needed).
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -21,6 +23,12 @@ if ($userPath -notlike "*$dir*") {
     Write-Host "Added $dir to your PATH."
 }
 
+# Also update THIS session's PATH so it works without opening a new window.
+if ($env:Path -notlike "*$dir*") {
+    $env:Path = "$env:Path;$dir"
+}
+
 Write-Host ""
 Write-Host "Installed: $exe"
-Write-Host "Open a NEW terminal window (PowerShell or Command Prompt) and run: speedtest-rli"
+Write-Host "You can run it right now in this window: speedtest"
+Write-Host "(It also works as 'speedtest-rli'.)"
