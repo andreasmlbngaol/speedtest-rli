@@ -59,7 +59,8 @@ from any terminal, put it in a folder that is on your `PATH`.
 ### System tray (optional)
 
 The installers also drop a small tray app that lives in the taskbar and
-starts automatically at login. It has three menu items:
+starts automatically at login. It starts running right after install, so you
+do not need to log out first. It has three menu items:
 
 - **Start** — opens a terminal and runs the speedtest.
 - **Update** — downloads the latest release and replaces both the tray and
@@ -73,6 +74,10 @@ autostart, remove the file the installer created:
 - macOS: `~/Library/LaunchAgents/com.andreasmlbngaol.speedtest-tray.plist`
 - Windows: delete the `speedtest-tray` value under
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+
+On GNOME the icon lives in the top-right indicator menu; plain GNOME needs
+the *AppIndicator and KStatusNotifierItem Support* extension (Zorin, Ubuntu,
+KDE, XFCE and Cinnamon ship it already).
 
 ### From source
 

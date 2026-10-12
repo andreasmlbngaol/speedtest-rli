@@ -48,12 +48,14 @@ fn build_tray() -> TrayIcon {
     builder.build().expect("failed to create tray icon")
 }
 
-/// A white ring on a transparent background. Drawn in code so no icon asset or
-/// image-decoding dependency is needed.
+/// A white ring + centre dot, drawn in code so no icon asset or image-decoding
+/// dependency is needed. A dark 1px halo is added around the shape so the icon
+/// stays visible on light panels too (GNOME/Zorin ship a light panel by default).
 fn make_icon() -> Icon {
     let n = ICON_SIZE as i32;
     let r = n as f64 / 2.0;
     let mut rgba = vec![0u8; (n * n * 4) as usize];
+    let mut shape = vec![false; (n * n) as usize];
     for y in 0..n {
         for x in 0..n {
             let dx = x as f64 + 0.5 - r;
@@ -63,12 +65,30 @@ fn make_icon() -> Icon {
             let in_ring = dist > r * 0.55 && dist < r * 0.9;
             let in_dot = dist < r * 0.3;
             if in_ring || in_dot {
-                let i = ((y * n + x) * 4) as usize;
+                shape[(y * n + x) as usize] = true;
+            }
+        }
+    }
+    for y in 0..n {
+        for x in 0..n {
+            let idx = (y * n + x) as usize;
+            let i = idx * 4;
+            if shape[idx] {
                 rgba[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
+            } else if neighbours_shape(&shape, n, x, y) {
+                rgba[i..i + 4].copy_from_slice(&[32, 32, 32, 255]);
             }
         }
     }
     Icon::from_rgba(rgba, ICON_SIZE, ICON_SIZE).expect("valid icon")
+}
+
+/// True if any 4-neighbour of (x, y) is part of the drawn shape.
+fn neighbours_shape(shape: &[bool], n: i32, x: i32, y: i32) -> bool {
+    [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().any(|(dx, dy)| {
+        let (nx, ny) = (x + dx, y + dy);
+        (0..n).contains(&nx) && (0..n).contains(&ny) && shape[(ny * n + nx) as usize]
+    })
 }
 
 /// Open a terminal window running the CLI.

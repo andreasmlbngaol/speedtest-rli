@@ -80,6 +80,14 @@ EOF
       echo "Autostart enabled (LaunchAgent in $agents)."
       ;;
   esac
+  # Start it right away too, so the tray shows up without waiting for a re-login.
+  # setsid/nohup detach it from this shell (which is often a curl | sh pipe).
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$dir/speedtest-tray" >/dev/null 2>&1 < /dev/null &
+  else
+    nohup "$dir/speedtest-tray" >/dev/null 2>&1 < /dev/null &
+  fi
+  echo "Tray started."
 else
   echo "Note: tray binary not available for this platform; CLI installed on its own."
 fi
