@@ -22,7 +22,6 @@ pub struct Config {
     pub upload_length: u64,
     pub download_length: u64,
     pub upload_max: u64,
-    pub lat_lon: (f64, f64),
 }
 
 pub fn get_config(client: &Client, secure: bool) -> Result<Config, String> {
@@ -84,9 +83,6 @@ fn parse_config(xml: &str) -> Result<Config, String> {
     let upload_length = upload.get("testlength").and_then(|v| v.parse().ok()).unwrap_or(10);
     let download_length = download.get("testlength").and_then(|v| v.parse().ok()).unwrap_or(10);
 
-    let lat: f64 = client.get("lat").and_then(|v| v.parse().ok()).unwrap_or(0.0);
-    let lon: f64 = client.get("lon").and_then(|v| v.parse().ok()).unwrap_or(0.0);
-
     Ok(Config {
         client,
         ignore_servers,
@@ -99,6 +95,5 @@ fn parse_config(xml: &str) -> Result<Config, String> {
         upload_length,
         download_length,
         upload_max: upload_count * size_count,
-        lat_lon: (lat, lon),
     })
 }

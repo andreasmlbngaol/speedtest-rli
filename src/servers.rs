@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use reqwest::blocking::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::http;
@@ -21,28 +21,33 @@ pub struct Server {
     pub latency: f64,
 }
 
-/// Haversine distance in km between two (lat, lon) points.
-pub fn distance(origin: (f64, f64), destination: (f64, f64)) -> f64 {
-    let (lat1, lon1) = origin;
-    let (lat2, lon2) = destination;
-    let radius = 6371.0_f64;
-
-    let dlat = (lat2 - lat1).to_radians();
-    let dlon = (lon2 - lon1).to_radians();
-    let a = (dlat / 2.0).sin().powi(2)
-        + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlon / 2.0).sin().powi(2);
-    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
-    radius * c
+/// One entry from speedtest.net's JSON server API.
+#[derive(Deserialize)]
+struct ApiServer {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    country: String,
+    #[serde(default)]
+    sponsor: String,
+    #[serde(default)]
+    lat: String,
+    #[serde(default)]
+    lon: String,
+    #[serde(default)]
+    distance: f64,
 }
 
-const SERVER_URLS: [&str; 4] = [
-    "://www.speedtest.net/speedtest-servers-static.php",
-    "http://c.speedtest.net/speedtest-servers-static.php",
-    "://www.speedtest.net/speedtest-servers.php",
-    "http://c.speedtest.net/speedtest-servers.php",
-];
-
 /// Fetch and parse servers, applying `only` / `exclude` filters.
+///
+/// Uses speedtest.net's JSON API (`/api/js/servers`), which geolocates on the
+/// server side and returns the nearest servers. The old
+/// `speedtest-servers-static.php` XML feed is dead: it returns a fixed set of
+/// 10 Singapore servers regardless of the client's location.
 pub fn get_servers(
     client: &Client,
     cfg: &Config,
@@ -50,46 +55,41 @@ pub fn get_servers(
     only: &[i64],
     exclude: &[i64],
 ) -> Result<Vec<Server>, String> {
-    let mut last_err = String::from("Cannot retrieve speedtest server list");
-
-    for raw in SERVER_URLS {
-        let url = if raw.starts_with(':') {
-            format!("{}{}", http::scheme(secure), raw)
-        } else {
-            raw.to_string()
-        };
-        let url = format!("{url}?threads={}", cfg.download_threads);
-
-        let body = match client.get(&url).send().and_then(|r| r.error_for_status()).and_then(|r| r.text()) {
-            Ok(b) => b,
-            Err(e) => {
-                last_err = format!("Cannot retrieve speedtest server list: {e}");
-                continue;
-            }
-        };
-
-        match parse_servers(&body, cfg, only, exclude) {
-            Ok(servers) => return Ok(servers),
-            Err(e) => last_err = e,
-        }
+    let mut url = format!(
+        "{}://www.speedtest.net/api/js/servers?engine=js&limit=100",
+        http::scheme(secure)
+    );
+    if !only.is_empty() {
+        let ids = only
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        url.push_str(&format!("&server_ids={ids}"));
     }
 
-    Err(last_err)
+    let body = client
+        .get(&url)
+        .send()
+        .and_then(|r| r.error_for_status())
+        .and_then(|r| r.text())
+        .map_err(|e| format!("Cannot retrieve speedtest server list: {e}"))?;
+
+    parse_servers(&body, cfg, only, exclude)
 }
 
 fn parse_servers(
-    xml: &str,
+    json: &str,
     cfg: &Config,
     only: &[i64],
     exclude: &[i64],
 ) -> Result<Vec<Server>, String> {
-    let doc = roxmltree::Document::parse(xml)
+    let list: Vec<ApiServer> = serde_json::from_str(json)
         .map_err(|e| format!("Malformed speedtest.net server list: {e}"))?;
 
     let mut servers = Vec::new();
-    for node in doc.descendants().filter(|n| n.has_tag_name("server")) {
-        let get = |k: &str| node.attribute(k).unwrap_or("").to_string();
-        let id: i64 = match get("id").parse() {
+    for s in list {
+        let id: i64 = match s.id.parse() {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -99,19 +99,16 @@ fn parse_servers(
         if cfg.ignore_servers.contains(&id) || exclude.contains(&id) {
             continue;
         }
-        let (lat, lon) = match (get("lat").parse::<f64>(), get("lon").parse::<f64>()) {
-            (Ok(la), Ok(lo)) => (la, lo),
-            _ => continue,
-        };
         servers.push(Server {
-            id: id.to_string(),
-            sponsor: get("sponsor"),
-            name: get("name"),
-            country: get("country"),
-            url: get("url"),
-            lat,
-            lon,
-            d: distance(cfg.lat_lon, (lat, lon)),
+            id: s.id,
+            sponsor: s.sponsor,
+            name: s.name,
+            country: s.country,
+            url: s.url,
+            lat: s.lat.parse().unwrap_or(0.0),
+            lon: s.lon.parse().unwrap_or(0.0),
+            // Server-side distance, computed by speedtest.net from our real IP.
+            d: s.distance,
             latency: 0.0,
         });
     }
@@ -241,15 +238,52 @@ fn find_upload_extension(text: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn distance_zero_for_same_point() {
-        assert_eq!(distance((1.0, 2.0), (1.0, 2.0)), 0.0);
+    fn cfg() -> Config {
+        Config {
+            client: Default::default(),
+            ignore_servers: vec![],
+            upload_sizes: vec![],
+            download_sizes: vec![],
+            upload_count: 0,
+            download_count: 0,
+            upload_threads: 1,
+            download_threads: 1,
+            upload_length: 0,
+            download_length: 0,
+            upload_max: 0,
+        }
     }
 
     #[test]
-    fn distance_known_pair() {
-        // Jakarta (-6.2, 106.8) to Bandung (-6.9, 107.6) ~ 118 km
-        let d = distance((-6.2, 106.8), (-6.9, 107.6));
-        assert!((d - 118.0).abs() < 5.0, "got {d}");
+    fn parses_json_api_and_sorts_by_distance() {
+        let json = r#"[
+            {"id":"2","url":"http://b/upload.php","name":"Far","country":"ID",
+             "sponsor":"B","lat":"1.0","lon":"2.0","distance":900.0},
+            {"id":"1","url":"http://a/upload.php","name":"Near","country":"ID",
+             "sponsor":"A","lat":"3.0","lon":"4.0","distance":5.0}
+        ]"#;
+        let servers = parse_servers(json, &cfg(), &[], &[]).unwrap();
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[0].id, "1");
+        assert_eq!(servers[0].name, "Near");
+        assert_eq!(servers[0].d, 5.0);
+        assert_eq!(servers[1].id, "2");
+    }
+
+    #[test]
+    fn excludes_ignored_and_only_keeps_selected() {
+        let json = r#"[
+            {"id":"1","url":"u","name":"A","country":"ID","sponsor":"A","lat":"0","lon":"0","distance":1.0},
+            {"id":"2","url":"u","name":"B","country":"ID","sponsor":"B","lat":"0","lon":"0","distance":2.0}
+        ]"#;
+        let servers = parse_servers(json, &cfg(), &[2], &[]).unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].id, "2");
+
+        let mut c = cfg();
+        c.ignore_servers = vec![1];
+        let servers = parse_servers(json, &c, &[], &[]).unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].id, "2");
     }
 }
