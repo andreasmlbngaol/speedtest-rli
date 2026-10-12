@@ -58,23 +58,34 @@ pub fn current_os_arch() -> (&'static str, &'static str) {
     (os, arch)
 }
 
-/// The `speedtest` binary. Prefer the one installed next to the tray exe;
-/// fall back to the bare name (resolved via `PATH`).
-pub fn cli_binary_path() -> PathBuf {
+/// The `speedtest` binary sitting next to `tray_exe`, else the bare name
+/// (resolved via `PATH`).
+pub fn cli_binary_beside(tray_exe: &Path) -> PathBuf {
     let name = if cfg!(target_os = "windows") {
         "speedtest.exe"
     } else {
         "speedtest"
     };
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
+    if let Some(dir) = tray_exe.parent() {
         let beside = dir.join(name);
         if beside.exists() {
             return beside;
         }
     }
     PathBuf::from(name)
+}
+
+/// The `speedtest` binary. Prefer the one installed next to the tray exe;
+/// fall back to the bare name (resolved via `PATH`).
+pub fn cli_binary_path() -> PathBuf {
+    match std::env::current_exe() {
+        Ok(exe) => cli_binary_beside(&exe),
+        Err(_) => PathBuf::from(if cfg!(target_os = "windows") {
+            "speedtest.exe"
+        } else {
+            "speedtest"
+        }),
+    }
 }
 
 /// `true` if `program` is found on `PATH`.
@@ -224,13 +235,19 @@ pub fn update_log_path() -> PathBuf {
 ///
 /// Pure (takes `os` explicitly) so both the Windows and the Unix shapes can be
 /// unit-tested from any host — the Windows branch cannot be compiled here.
+///
+/// On Windows the updater runs from a **copy** in `%TEMP%`: a running exe is
+/// locked, so the real `tray_exe` could not be replaced by a process running
+/// from it. The real path is passed as an argument so the copy knows what to
+/// replace and relaunch. On unix `rename` over a running binary is fine, so the
+/// tray replaces itself in place.
 pub fn update_command_line_for(os: &str, tray_exe: &Path, log: &Path) -> String {
     let exe = tray_exe.to_string_lossy();
     if os == "windows" {
-        // `start /wait` blocks until the GUI-subsystem tray exe exits, then we
-        // print the log it wrote (the exe has no console of its own).
         format!(
-            "start \"\" /wait \"{exe}\" --update\r\ntype \"{}\"",
+            "copy /y \"{exe}\" \"%TEMP%\\speedtest-updater.exe\" >nul 2>&1\r\n\
+             \"%TEMP%\\speedtest-updater.exe\" --update \"{exe}\"\r\n\
+             type \"{}\"",
             log.display()
         )
     } else {
@@ -418,7 +435,7 @@ mod tests {
 
     #[test]
     fn update_command_line_targets_this_exe_with_the_update_flag() {
-        // Unix shape.
+        // Unix shape: the tray replaces itself in place.
         let unix = update_command_line_for(
             "unix",
             Path::new("/x/speedtest-tray"),
@@ -432,8 +449,14 @@ mod tests {
             Path::new("C:\\x\\speedtest-tray.exe"),
             Path::new("C:\\Temp\\speedtest-update.log"),
         );
-        assert!(win.contains("start \"\" /wait"), "win={win}");
-        assert!(win.contains("\"C:\\x\\speedtest-tray.exe\" --update"), "win={win}");
+        // Runs from a temp copy so the real exe is not locked while replaced...
+        assert!(win.contains("copy /y"), "win={win}");
+        assert!(win.contains("%TEMP%\\speedtest-updater.exe"), "win={win}");
+        // ...and is told which real path to replace and relaunch.
+        assert!(
+            win.contains("\"%TEMP%\\speedtest-updater.exe\" --update \"C:\\x\\speedtest-tray.exe\""),
+            "win={win}"
+        );
         assert!(win.contains("type \"C:\\Temp\\speedtest-update.log\""), "win={win}");
         assert!(win.contains("\r\n"), "win should use CRLF: {win}");
         // The bug this fixes: no escaped `\"` may reach cmd.exe.

@@ -106,21 +106,30 @@ fn start_speedtest() {
 
 /// Open a terminal window that runs this binary with `--update`, so the
 /// check/download output is visible and the window waits for a key at the end.
-fn update_in_terminal() {
+/// Returns `false` if no terminal could be launched.
+fn update_in_terminal() -> bool {
     let Ok(exe) = std::env::current_exe() else {
-        return;
+        return false;
     };
     let Some((program, args)) = tray_support::update_terminal_command(&exe) else {
-        return;
+        return false;
     };
-    let _ = Command::new(program).args(args).spawn();
+    Command::new(program).args(args).spawn().is_ok()
 }
 
 /// Handle a clicked menu item. Returns `true` if the app should exit.
 fn handle_menu(id: &str, _tray: &TrayIcon) -> bool {
     match id {
         tray_support::MENU_START => start_speedtest(),
-        tray_support::MENU_UPDATE => update_in_terminal(),
+        tray_support::MENU_UPDATE => {
+            if update_in_terminal() {
+                // On unix the running tray can be replaced in place, so keep it.
+                // On Windows the exe is locked while running: exit now and let
+                // the updater start a fresh tray when it finishes, so we don't
+                // end up with the old and new tray both showing.
+                return cfg!(target_os = "windows");
+            }
+        }
         tray_support::MENU_EXIT => return true,
         _ => {}
     }
@@ -131,18 +140,59 @@ fn handle_menu(id: &str, _tray: &TrayIcon) -> bool {
 // Platform event loops
 // ---------------------------------------------------------------------------
 
-/// Run `--update` in the foreground, print the result, and exit.
-///
-/// On Windows this process is a GUI-subsystem exe with no console, so its
-/// stdout is invisible; write the same line to the log file the batch file
-/// prints afterwards. On other platforms stdout goes straight to the terminal.
-fn run_update_mode() {
-    let msg = update();
+/// Print progress. On Windows this process is a GUI-subsystem exe with no
+/// console, so its stdout is invisible; also append to the log file that the
+/// launching batch file prints after this process exits.
+fn log(msg: &str) {
     #[cfg(target_os = "windows")]
     {
-        let _ = std::fs::write(tray_support::update_log_path(), format!("{msg}\r\n"));
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(tray_support::update_log_path())
+        {
+            let _ = writeln!(f, "{msg}");
+        }
     }
     println!("{msg}");
+}
+
+/// The tray path this updater must replace and relaunch.
+///
+/// On Windows the updater runs from a copy in `%TEMP%` (a running exe is
+/// locked), so the real tray path is passed as an argument. Elsewhere the
+/// updater is the tray itself, so its own path is the target.
+fn update_target() -> Option<std::path::PathBuf> {
+    let mut args = std::env::args().skip_while(|a| a != "--update");
+    args.next(); // consume "--update"
+    args.next()
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_exe().ok())
+}
+
+/// Run `--update` in the foreground, print the result, and exit.
+///
+/// On Windows the tray that launched us has already exited (the running exe
+/// must be replaced), so start exactly one fresh tray here — otherwise clicking
+/// Update would leave the old tray and the new one both running. On unix the
+/// running tray replaced itself in place and is still alive, so we do not.
+fn run_update_mode() {
+    let Some(target) = update_target() else {
+        return;
+    };
+    #[cfg(target_os = "windows")]
+    let _ = std::fs::write(tray_support::update_log_path(), "");
+    let msg = match do_update(&target) {
+        Ok(None) => "Already up to date".to_string(),
+        Ok(Some(v)) => format!("Updated to v{v}"),
+        Err(e) => format!("Update failed: {e}"),
+    };
+    log(&msg);
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new(&target).spawn();
+    }
 }
 
 /// Linux/BSD: the ksni backend owns its D-Bus thread, so poll the menu channel.
@@ -230,22 +280,15 @@ struct Asset {
 }
 
 /// Check GitHub for a newer release and, if there is one, replace both the CLI
-/// and this tray binary. Returns a short status message for the tooltip.
-fn update() -> String {
-    match do_update() {
-        Ok(None) => "Already up to date".to_string(),
-        Ok(Some(v)) => format!("Updated to v{v}"),
-        Err(e) => format!("Update failed: {e}"),
-    }
-}
-
-fn do_update() -> Result<Option<String>, String> {
+/// and the tray binary at `tray_exe`.
+fn do_update(tray_exe: &std::path::Path) -> Result<Option<String>, String> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("speedtest-tray/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| e.to_string())?;
 
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+    log("Checking for updates...");
     let body = client
         .get(&url)
         .send()
@@ -259,36 +302,40 @@ fn do_update() -> Result<Option<String>, String> {
     if latest == env!("CARGO_PKG_VERSION") {
         return Ok(None);
     }
+    log(&format!(
+        "Updating {} -> v{latest}...",
+        env!("CARGO_PKG_VERSION")
+    ));
 
     let (os, arch) = tray_support::current_os_arch();
 
-    // Replace the CLI first (it is not running), then this tray binary.
+    // Replace the CLI first (it is not running), then the tray binary.
     if let Some(name) = tray_support::cli_asset_name(os, arch)
         && let Some(asset) = release.assets.iter().find(|a| a.name == name)
     {
-        install_asset(&client, asset, &tray_support::cli_binary_path())?;
+        log(&format!("Downloading {name}..."));
+        install_asset(&client, asset, &tray_support::cli_binary_beside(tray_exe))?;
     }
 
     if let Some(name) = tray_support::tray_asset_name(os, arch)
         && let Some(asset) = release.assets.iter().find(|a| a.name == name)
-        && let Ok(exe) = std::env::current_exe()
-        && install_asset(&client, asset, &exe)?
     {
-        // Windows swapped the running exe out from under us.
-        let _ = Command::new(&exe).spawn();
-        std::process::exit(0);
+        log(&format!("Downloading {name}..."));
+        install_asset(&client, asset, tray_exe)?;
     }
 
     Ok(Some(latest.to_string()))
 }
 
-/// Download `asset` and put it at `target`. Returns `true` if the caller must
-/// restart (Windows: the running exe was swapped out from under us).
+/// Download `asset` and put it at `target`.
+///
+/// On Windows the running exe cannot be overwritten, so it is moved aside
+/// (`<target>.old`) first; the caller restarts the tray afterwards.
 fn install_asset(
     client: &reqwest::blocking::Client,
     asset: &Asset,
     target: &std::path::Path,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     let tmp = tmp_beside(target);
     let bytes = client
         .get(&asset.browser_download_url)
@@ -299,21 +346,20 @@ fn install_asset(
     std::fs::write(&tmp, &bytes).map_err(|e| format!("write failed: {e}"))?;
     make_executable(&tmp);
 
-    // Unix: rename over a running binary is fine. Windows: the running exe is
-    // locked, so move it aside, drop the new one in, and ask for a restart.
+    // Unix: rename over a running binary is fine.
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(&tmp, target).map_err(|e| format!("replace failed: {e}"))?;
+    }
+    // Windows: the running exe is locked, so move it aside and drop the new one in.
     #[cfg(windows)]
     {
         let old = target.with_extension("old");
         let _ = std::fs::remove_file(&old);
         std::fs::rename(target, &old).map_err(|e| format!("replace failed: {e}"))?;
         std::fs::rename(&tmp, target).map_err(|e| format!("replace failed: {e}"))?;
-        Ok(true)
     }
-    #[cfg(not(windows))]
-    {
-        std::fs::rename(&tmp, target).map_err(|e| format!("replace failed: {e}"))?;
-        Ok(false)
-    }
+    Ok(())
 }
 
 fn tmp_beside(target: &std::path::Path) -> std::path::PathBuf {
