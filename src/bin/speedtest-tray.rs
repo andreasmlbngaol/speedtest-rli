@@ -252,9 +252,17 @@ fn main() {
             // Create the icon once the loop is running (macOS: main thread).
             Event::NewEvents(StartCause::Init) => tray = Some(build_tray()),
             Event::UserEvent(UserEvent::Menu(event)) => {
-                if let Some(t) = tray.as_ref()
-                    && handle_menu(event.id().0.as_str(), t)
-                {
+                let exit = tray
+                    .as_ref()
+                    .is_some_and(|t| handle_menu(event.id().0.as_str(), t));
+                if exit {
+                    // Drop the icon *now*, before the loop ends. `tao`'s
+                    // `EventLoop::run` never returns — it calls `process::exit`,
+                    // which skips destructors — so a `TrayIcon` still alive at
+                    // exit is never removed. On Windows that leaves a ghost icon
+                    // in the notification area (and the updater's fresh tray
+                    // makes it look like two); on macOS a stale menu-bar item.
+                    tray = None;
                     *control_flow = ControlFlow::Exit;
                 }
             }

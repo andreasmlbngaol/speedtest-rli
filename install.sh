@@ -82,12 +82,16 @@ EOF
   esac
   # Start it right away too, so the tray shows up without waiting for a re-login.
   # setsid/nohup detach it from this shell (which is often a curl | sh pipe).
-  if command -v setsid >/dev/null 2>&1; then
+  # Skip if one is already running, so re-running the installer never doubles it.
+  if command -v pgrep >/dev/null 2>&1 && pgrep -f "$dir/speedtest-tray" >/dev/null 2>&1; then
+    echo "Tray already running."
+  elif command -v setsid >/dev/null 2>&1; then
     setsid "$dir/speedtest-tray" >/dev/null 2>&1 < /dev/null &
+    echo "Tray started."
   else
     nohup "$dir/speedtest-tray" >/dev/null 2>&1 < /dev/null &
+    echo "Tray started."
   fi
-  echo "Tray started."
 else
   echo "Note: tray binary not available for this platform; CLI installed on its own."
 fi

@@ -25,7 +25,10 @@ try {
     $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     Set-ItemProperty -Path $runKey -Name 'speedtest-tray' -Value "`"$trayExe`""
     # Start it right away too, so the tray shows up without waiting for a re-login.
-    Start-Process -FilePath $trayExe -WindowStyle Hidden
+    # Skip if one is already running, so re-running the installer never doubles it.
+    if (-not (Get-Process -Name 'speedtest-tray' -ErrorAction SilentlyContinue)) {
+        Start-Process -FilePath $trayExe -WindowStyle Hidden
+    }
     Write-Host "Tray installed, started, and set to start at login: $trayExe"
 } catch {
     Write-Host "Note: tray binary not available; CLI installed on its own."
