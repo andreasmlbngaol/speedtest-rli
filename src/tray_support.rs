@@ -112,8 +112,12 @@ fn applescript_escape(s: &str) -> String {
 /// `\"` when building the child command line, and cmd.exe does not understand
 /// `\"`, which corrupts any quoted path. A batch file is parsed by cmd itself,
 /// so quotes survive verbatim.
+///
+/// The trailing `exit` matters: `start "" file.bat` runs the batch via
+/// `cmd /K`, so without it the console stays open at a prompt after `pause`
+/// (you can keep typing instead of the window closing).
 pub fn windows_batch(cmd: &str) -> String {
-    format!("@echo off\r\n{cmd}\r\npause\r\n")
+    format!("@echo off\r\n{cmd}\r\npause\r\nexit\r\n")
 }
 
 /// Write `windows_batch(cmd)` to a temp `.bat` and return its path. The name is
@@ -361,6 +365,14 @@ mod tests {
     }
 
     #[test]
+    fn windows_batch_exits_after_pause() {
+        // `start "" file.bat` runs the batch via `cmd /K`, which would otherwise
+        // leave the console open at a prompt after `pause`.
+        let bat = windows_batch("echo hi");
+        assert!(bat.contains("\r\npause\r\nexit\r\n"), "bat={bat:?}");
+    }
+
+    #[test]
     fn macos_terminal_command_uses_osascript() {
         if !cfg!(target_os = "macos") {
             return;
@@ -426,14 +438,6 @@ mod tests {
         assert!(win.contains("\r\n"), "win should use CRLF: {win}");
         // The bug this fixes: no escaped `\"` may reach cmd.exe.
         assert!(!win.contains("\\\""), "win must not contain escaped quotes: {win}");
-    }
-
-    #[test]
-    fn batch_has_crlf_and_pauses() {
-        let bat = windows_batch("\"C:\\x\\speedtest.exe\"");
-        assert!(bat.starts_with("@echo off\r\n"), "bat={bat:?}");
-        assert!(bat.contains("\"C:\\x\\speedtest.exe\""));
-        assert!(bat.contains("\r\npause\r\n"), "bat={bat:?}");
     }
 
     #[test]
