@@ -131,13 +131,27 @@ fn handle_menu(id: &str, _tray: &TrayIcon) -> bool {
 // Platform event loops
 // ---------------------------------------------------------------------------
 
+/// Run `--update` in the foreground, print the result, and exit.
+///
+/// On Windows this process is a GUI-subsystem exe with no console, so its
+/// stdout is invisible; write the same line to the log file the batch file
+/// prints afterwards. On other platforms stdout goes straight to the terminal.
+fn run_update_mode() {
+    let msg = update();
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::fs::write(tray_support::update_log_path(), format!("{msg}\r\n"));
+    }
+    println!("{msg}");
+}
+
 /// Linux/BSD: the ksni backend owns its D-Bus thread, so poll the menu channel.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn main() {
     // `--update` runs the update in this (foreground) process and exits, so the
     // tray can pop a terminal showing progress. Normal launch starts the tray.
     if std::env::args().any(|a| a == "--update") {
-        println!("{}", update());
+        run_update_mode();
         return;
     }
     let tray = build_tray();
@@ -159,7 +173,7 @@ fn main() {
     use tray_icon::TrayIconEvent;
 
     if std::env::args().any(|a| a == "--update") {
-        println!("{}", update());
+        run_update_mode();
         return;
     }
 

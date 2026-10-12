@@ -105,6 +105,28 @@ fn applescript_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Batch-file contents that run `cmd` in a new console and then wait for a key.
+///
+/// On Windows the actual command is written to a temp `.bat` and launched,
+/// rather than passed as a `cmd /C` argument: Rust escapes embedded `"` as
+/// `\"` when building the child command line, and cmd.exe does not understand
+/// `\"`, which corrupts any quoted path. A batch file is parsed by cmd itself,
+/// so quotes survive verbatim.
+pub fn windows_batch(cmd: &str) -> String {
+    format!("@echo off\r\n{cmd}\r\npause\r\n")
+}
+
+/// Write `windows_batch(cmd)` to a temp `.bat` and return its path. The name is
+/// derived from the content so Start and Update never clobber each other.
+fn write_batch(cmd: &str) -> Option<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    cmd.hash(&mut h);
+    let path = std::env::temp_dir().join(format!("speedtest-run-{:016x}.bat", h.finish()));
+    std::fs::write(&path, windows_batch(cmd)).ok()?;
+    Some(path)
+}
+
 /// Command to open a terminal window that runs `cli` and then waits for a key,
 /// so the window stays open long enough to read the result.
 ///
@@ -124,17 +146,17 @@ pub fn terminal_command(cli: &Path) -> Option<(String, Vec<String>)> {
 /// can pass extra arguments (e.g. `speedtest-tray --update`).
 pub fn terminal_command_for(cmd: &str) -> Option<(String, Vec<String>)> {
     if cfg!(target_os = "windows") {
-        // `start` needs an (empty) window-title argument before the command;
-        // `pause` in the new window waits for a key before it closes.
+        // Launch the temp batch file: `start ""` opens a new console window for
+        // it, and the batch's trailing `pause` waits for a key. The only quoted
+        // token passed to cmd is the batch path (no embedded quotes → no `\"`).
+        let bat = write_batch(cmd)?;
         return Some((
             "cmd".into(),
             vec![
                 "/C".into(),
                 "start".into(),
                 String::new(),
-                "cmd".into(),
-                "/C".into(),
-                format!("{cmd} & pause"),
+                bat.to_string_lossy().into_owned(),
             ],
         ));
     }
@@ -187,21 +209,39 @@ pub fn terminal_command_for(cmd: &str) -> Option<(String, Vec<String>)> {
     None
 }
 
-/// The command line that re-runs the tray binary in update mode. Pure so it can
-/// be tested without a terminal installed.
-pub fn update_command_line(tray_exe: &Path) -> String {
+/// Path the tray writes its `--update` output to on Windows. The tray is a
+/// GUI-subsystem exe with no console, so `println!` goes nowhere; the batch
+/// file that launched it `type`s this file instead.
+pub fn update_log_path() -> PathBuf {
+    std::env::temp_dir().join("speedtest-update.log")
+}
+
+/// The command that re-runs the tray binary in update mode, for a given `os`.
+///
+/// Pure (takes `os` explicitly) so both the Windows and the Unix shapes can be
+/// unit-tested from any host — the Windows branch cannot be compiled here.
+pub fn update_command_line_for(os: &str, tray_exe: &Path, log: &Path) -> String {
     let exe = tray_exe.to_string_lossy();
-    if cfg!(target_os = "windows") {
-        // The tray is a GUI-subsystem exe with no console, so its stdout is not
-        // attached to the terminal we spawn. Redirect it to a file and `type` it.
-        // `start /wait` blocks until the update finishes (cmd does not wait for a
-        // GUI-subsystem process on its own).
-        let log = std::env::temp_dir().join("speedtest-update.log");
-        let log = log.to_string_lossy();
-        format!("start \"\" /wait \"{exe}\" --update > \"{log}\" 2>&1 & type \"{log}\"")
+    if os == "windows" {
+        // `start /wait` blocks until the GUI-subsystem tray exe exits, then we
+        // print the log it wrote (the exe has no console of its own).
+        format!(
+            "start \"\" /wait \"{exe}\" --update\r\ntype \"{}\"",
+            log.display()
+        )
     } else {
         format!("{} --update", shell_quote(&exe))
     }
+}
+
+/// [`update_command_line_for`] for the running platform.
+pub fn update_command_line(tray_exe: &Path) -> String {
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "unix"
+    };
+    update_command_line_for(os, tray_exe, &update_log_path())
 }
 
 /// Terminal command that re-runs this tray binary with `--update`, so the
@@ -307,10 +347,17 @@ mod tests {
         assert_eq!(args[0], "/C");
         assert_eq!(args[1], "start");
         assert_eq!(args[2], ""); // empty title
-        // Runs the CLI then pauses so the window stays open.
-        assert!(args[3] == "cmd" && args[4] == "/C");
-        assert!(args[5].contains("speedtest.exe"));
-        assert!(args[5].contains("pause"));
+        // Launches a temp batch file (no embedded quotes to be mangled).
+        assert!(args[3].ends_with(".bat"), "arg={}", args[3]);
+        assert!(!args[3].contains('"'), "no quotes in bat path: {}", args[3]);
+    }
+
+    #[test]
+    fn windows_batch_runs_the_command_then_pauses() {
+        let bat = windows_batch("\"C:\\x\\speedtest.exe\"");
+        assert!(bat.starts_with("@echo off"));
+        assert!(bat.contains("\"C:\\x\\speedtest.exe\""));
+        assert!(bat.contains("\r\npause"));
     }
 
     #[test]
@@ -359,14 +406,34 @@ mod tests {
 
     #[test]
     fn update_command_line_targets_this_exe_with_the_update_flag() {
-        let cmd = update_command_line(Path::new("/x/speedtest-tray"));
-        assert!(cmd.contains("--update"), "cmd={cmd}");
-        if cfg!(target_os = "windows") {
-            assert!(cmd.contains("speedtest-tray"));
-            assert!(cmd.contains("type "));
-        } else {
-            assert!(cmd.contains("'/x/speedtest-tray' --update"), "cmd={cmd}");
-        }
+        // Unix shape.
+        let unix = update_command_line_for(
+            "unix",
+            Path::new("/x/speedtest-tray"),
+            Path::new("/tmp/speedtest-update.log"),
+        );
+        assert!(unix.contains("'/x/speedtest-tray' --update"), "unix={unix}");
+
+        // Windows shape (testable from any host since `os` is a parameter).
+        let win = update_command_line_for(
+            "windows",
+            Path::new("C:\\x\\speedtest-tray.exe"),
+            Path::new("C:\\Temp\\speedtest-update.log"),
+        );
+        assert!(win.contains("start \"\" /wait"), "win={win}");
+        assert!(win.contains("\"C:\\x\\speedtest-tray.exe\" --update"), "win={win}");
+        assert!(win.contains("type \"C:\\Temp\\speedtest-update.log\""), "win={win}");
+        assert!(win.contains("\r\n"), "win should use CRLF: {win}");
+        // The bug this fixes: no escaped `\"` may reach cmd.exe.
+        assert!(!win.contains("\\\""), "win must not contain escaped quotes: {win}");
+    }
+
+    #[test]
+    fn batch_has_crlf_and_pauses() {
+        let bat = windows_batch("\"C:\\x\\speedtest.exe\"");
+        assert!(bat.starts_with("@echo off\r\n"), "bat={bat:?}");
+        assert!(bat.contains("\"C:\\x\\speedtest.exe\""));
+        assert!(bat.contains("\r\npause\r\n"), "bat={bat:?}");
     }
 
     #[test]
