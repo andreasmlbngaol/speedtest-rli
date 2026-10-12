@@ -3,7 +3,9 @@
 $ErrorActionPreference = 'Stop'
 
 $repo = 'andreasmlbngaol/speedtest-rli'
-$url  = "https://github.com/$repo/releases/latest/download/speedtest-rli-windows-x86_64.exe"
+$base = "https://github.com/$repo/releases/latest/download"
+$url  = "$base/speedtest-rli-windows-x86_64.exe"
+$trayUrl = "$base/speedtest-rli-tray-windows-x86_64.exe"
 
 $dir = Join-Path $env:LOCALAPPDATA 'speedtest-rli'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -13,6 +15,19 @@ Write-Host "Downloading speedtest..."
 Invoke-WebRequest -Uri $url -OutFile $exe
 # Keep the old name working too, in case scripts call speedtest-rli.
 Copy-Item -Path $exe -Destination (Join-Path $dir 'speedtest-rli.exe') -Force
+
+# Optional system-tray launcher (skipped if the download fails).
+$trayExe = Join-Path $dir 'speedtest-tray.exe'
+try {
+    Write-Host "Downloading speedtest tray..."
+    Invoke-WebRequest -Uri $trayUrl -OutFile $trayExe
+    # Autostart the tray at login via the per-user Run key (no admin rights).
+    $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    Set-ItemProperty -Path $runKey -Name 'speedtest-tray' -Value "`"$trayExe`""
+    Write-Host "Tray installed and set to start at login: $trayExe"
+} catch {
+    Write-Host "Note: tray binary not available; CLI installed on its own."
+}
 
 # Add the install folder to the *user* PATH (no admin rights needed).
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')

@@ -5,6 +5,7 @@ mod http;
 mod results;
 mod servers;
 mod transfer;
+mod tray_support;
 
 use std::process::ExitCode;
 

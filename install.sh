@@ -14,13 +14,13 @@ arch=$(uname -m)
 case "$os" in
   Linux)
     case "$arch" in
-      x86_64|amd64) asset="speedtest-rli-linux-x86_64" ;;
+      x86_64|amd64) asset="speedtest-rli-linux-x86_64"; tray_asset="speedtest-rli-tray-linux-x86_64" ;;
       *) echo "No prebuilt binary for Linux $arch. Build from source: https://github.com/$REPO" >&2; exit 1 ;;
     esac
     ;;
   Darwin)
     case "$arch" in
-      arm64|aarch64) asset="speedtest-rli-macos-aarch64" ;;
+      arm64|aarch64) asset="speedtest-rli-macos-aarch64"; tray_asset="speedtest-rli-tray-macos-aarch64" ;;
       *) echo "No prebuilt binary for macOS $arch. Build from source: https://github.com/$REPO" >&2; exit 1 ;;
     esac
     ;;
@@ -40,6 +40,49 @@ chmod +x "$dir/$BIN"
 ln -sf "$BIN" "$dir/$ALIAS"
 
 echo "Installed: $dir/$BIN"
+
+# Optional system-tray launcher (skipped if the download fails).
+if curl -fsSL "$BASE/$tray_asset" -o "$dir/speedtest-tray"; then
+  chmod +x "$dir/speedtest-tray"
+  echo "Installed tray: $dir/speedtest-tray"
+  case "$os" in
+    Linux)
+      autostart_dir="$HOME/.config/autostart"
+      mkdir -p "$autostart_dir"
+      cat > "$autostart_dir/speedtest-tray.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=speedtest tray
+Comment=Speedtest.net tray launcher
+Exec=$dir/speedtest-tray
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+      echo "Autostart enabled (remove $autostart_dir/speedtest-tray.desktop to disable)."
+      ;;
+    Darwin)
+      agents="$HOME/Library/LaunchAgents"
+      mkdir -p "$agents"
+      cat > "$agents/com.andreasmlbngaol.speedtest-tray.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>com.andreasmlbngaol.speedtest-tray</string>
+	<key>ProgramArguments</key>
+	<array><string>$dir/speedtest-tray</string></array>
+	<key>RunAtLoad</key><true/>
+</dict>
+</plist>
+EOF
+      launchctl unload "$agents/com.andreasmlbngaol.speedtest-tray.plist" 2>/dev/null || true
+      launchctl load "$agents/com.andreasmlbngaol.speedtest-tray.plist" 2>/dev/null || true
+      echo "Autostart enabled (LaunchAgent in $agents)."
+      ;;
+  esac
+else
+  echo "Note: tray binary not available for this platform; CLI installed on its own."
+fi
 
 case ":$PATH:" in
   *":$dir:"*)

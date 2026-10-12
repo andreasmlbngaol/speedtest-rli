@@ -1,17 +1,17 @@
 /target
 *.py[co]
 
-# Packages
+# Packages (Python-era leftovers; anchored so they don't swallow src/bin/)
 *.egg
 *.egg-info
-dist
-build
-eggs
-parts
-bin
-var
-sdist
-develop-eggs
+/dist
+/build
+/eggs
+/parts
+/bin
+/var
+/sdist
+/develop-eggs
 .installed.cfg
 
 # Installer logs

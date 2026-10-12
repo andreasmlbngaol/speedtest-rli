@@ -1,0 +1,277 @@
+//! Pure helpers shared by the tray app, kept free of any GUI dependency so they
+//! can be unit-tested under a plain `cargo test` with no display and no GTK.
+//!
+//! The tray binary includes this file with `#[path = "../tray_support.rs"]`.
+//! The CLI includes it as `mod tray_support;` only so its tests run; it never
+//! calls into it, hence the crate-level `dead_code` allowance.
+#![allow(dead_code)]
+
+use std::path::{Path, PathBuf};
+
+/// Menu item ids, matched in the event loop.
+pub const MENU_START: &str = "start";
+pub const MENU_UPDATE: &str = "update";
+pub const MENU_EXIT: &str = "exit";
+
+const REPO: &str = "andreasmlbngaol/speedtest-rli";
+
+/// GitHub release asset name for the CLI, for a given `(os, arch)`.
+///
+/// Mirrors the names produced by `.github/workflows/release.yml` (no target
+/// triple in the name, unlike what `self_update` would expect).
+pub fn cli_asset_name(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("linux", "x86_64") => Some("speedtest-rli-linux-x86_64"),
+        ("windows", "x86_64") => Some("speedtest-rli-windows-x86_64.exe"),
+        ("macos", "aarch64") => Some("speedtest-rli-macos-aarch64"),
+        _ => None,
+    }
+}
+
+/// GitHub release asset name for the tray, for a given `(os, arch)`.
+pub fn tray_asset_name(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("linux", "x86_64") => Some("speedtest-rli-tray-linux-x86_64"),
+        ("windows", "x86_64") => Some("speedtest-rli-tray-windows-x86_64.exe"),
+        ("macos", "aarch64") => Some("speedtest-rli-tray-macos-aarch64"),
+        _ => None,
+    }
+}
+
+/// `(os, arch)` of the running process, in the vocabulary the asset-name
+/// helpers expect.
+pub fn current_os_arch() -> (&'static str, &'static str) {
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "other"
+    };
+    (os, arch)
+}
+
+/// The `speedtest` binary. Prefer the one installed next to the tray exe;
+/// fall back to the bare name (resolved via `PATH`).
+pub fn cli_binary_path() -> PathBuf {
+    let name = if cfg!(target_os = "windows") {
+        "speedtest.exe"
+    } else {
+        "speedtest"
+    };
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let beside = dir.join(name);
+        if beside.exists() {
+            return beside;
+        }
+    }
+    PathBuf::from(name)
+}
+
+/// `true` if `program` is found on `PATH`.
+fn on_path(program: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| dir.join(program).is_file())
+}
+
+/// Command to open a terminal window that runs `cli`.
+///
+/// Returns `(program, args)` ready for `Command::new(program).args(args)`.
+/// `None` if no suitable terminal could be found.
+pub fn terminal_command(cli: &Path) -> Option<(String, Vec<String>)> {
+    let cli = cli.to_string_lossy().into_owned();
+
+    if cfg!(target_os = "windows") {
+        // `start` needs an (empty) window-title argument before the command.
+        return Some((
+            "cmd".into(),
+            vec!["/C".into(), "start".into(), String::new(), cli],
+        ));
+    }
+
+    if cfg!(target_os = "macos") {
+        let script = format!("tell application \"Terminal\" to do script \"{cli}\"");
+        return Some((
+            "osascript".into(),
+            vec![
+                "-e".into(),
+                script,
+                "-e".into(),
+                "tell application \"Terminal\" to activate".into(),
+            ],
+        ));
+    }
+
+    // Linux/BSD: pick the first terminal emulator that is actually installed.
+    // `gnome-terminal` uses `--`, `kitty` takes the program directly, the rest
+    // use `-e`.
+    for emu in [
+        "x-terminal-emulator",
+        "gnome-terminal",
+        "konsole",
+        "xfce4-terminal",
+        "alacritty",
+        "kitty",
+        "xterm",
+    ] {
+        if !on_path(emu) {
+            continue;
+        }
+        let args = match emu {
+            "gnome-terminal" => vec!["--".into(), cli.clone()],
+            "kitty" => vec![cli.clone()],
+            _ => vec!["-e".into(), cli.clone()],
+        };
+        return Some((emu.into(), args));
+    }
+    None
+}
+
+/// Contents of `~/.config/autostart/speedtest-tray.desktop` (Linux).
+pub fn autostart_desktop(tray_path: &Path) -> String {
+    format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=speedtest tray\n\
+         Comment=Speedtest.net tray launcher\n\
+         Exec={}\n\
+         Terminal=false\n\
+         X-GNOME-Autostart-enabled=true\n",
+        tray_path.display()
+    )
+}
+
+/// Contents of `~/Library/LaunchAgents/<label>.plist` (macOS).
+pub fn launchagent_plist(tray_path: &Path) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+         \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n\
+         <dict>\n\
+         \t<key>Label</key><string>{REPO}.tray</string>\n\
+         \t<key>ProgramArguments</key>\n\
+         \t<array><string>{}</string></array>\n\
+         \t<key>RunAtLoad</key><true/>\n\
+         </dict>\n\
+         </plist>\n",
+        tray_path.display()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn asset_names_cover_the_three_supported_platforms() {
+        assert_eq!(
+            cli_asset_name("linux", "x86_64"),
+            Some("speedtest-rli-linux-x86_64")
+        );
+        assert_eq!(
+            cli_asset_name("windows", "x86_64"),
+            Some("speedtest-rli-windows-x86_64.exe")
+        );
+        assert_eq!(
+            cli_asset_name("macos", "aarch64"),
+            Some("speedtest-rli-macos-aarch64")
+        );
+        assert_eq!(
+            tray_asset_name("linux", "x86_64"),
+            Some("speedtest-rli-tray-linux-x86_64")
+        );
+        assert_eq!(
+            tray_asset_name("windows", "x86_64"),
+            Some("speedtest-rli-tray-windows-x86_64.exe")
+        );
+        assert_eq!(
+            tray_asset_name("macos", "aarch64"),
+            Some("speedtest-rli-tray-macos-aarch64")
+        );
+    }
+
+    #[test]
+    fn unsupported_platforms_have_no_asset() {
+        assert_eq!(cli_asset_name("linux", "aarch64"), None);
+        assert_eq!(cli_asset_name("freebsd", "x86_64"), None);
+        assert_eq!(tray_asset_name("windows", "aarch64"), None);
+        assert_eq!(tray_asset_name("macos", "x86_64"), None);
+    }
+
+    #[test]
+    fn menu_ids_are_distinct() {
+        assert_ne!(MENU_START, MENU_UPDATE);
+        assert_ne!(MENU_UPDATE, MENU_EXIT);
+        assert_ne!(MENU_START, MENU_EXIT);
+    }
+
+    #[test]
+    fn current_platform_is_supported() {
+        let (os, arch) = current_os_arch();
+        // This test host is one of the three; both binaries must resolve.
+        assert!(cli_asset_name(os, arch).is_some(), "os={os} arch={arch}");
+        assert!(tray_asset_name(os, arch).is_some(), "os={os} arch={arch}");
+    }
+
+    #[test]
+    fn windows_terminal_command_has_title_placeholder() {
+        if !cfg!(target_os = "windows") {
+            return;
+        }
+        let (prog, args) = terminal_command(Path::new("C:\\x\\speedtest.exe")).unwrap();
+        assert_eq!(prog, "cmd");
+        assert_eq!(args[0], "/C");
+        assert_eq!(args[1], "start");
+        assert_eq!(args[2], ""); // empty title
+        assert!(args[3].ends_with("speedtest.exe"));
+    }
+
+    #[test]
+    fn macos_terminal_command_uses_osascript() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (prog, args) = terminal_command(Path::new("/usr/local/bin/speedtest")).unwrap();
+        assert_eq!(prog, "osascript");
+        assert!(args[0] == "-e");
+        assert!(args[1].contains("Terminal"));
+    }
+
+    #[test]
+    fn linux_terminal_args_match_emulator_conventions() {
+        if cfg!(target_os = "windows") || cfg!(target_os = "macos") {
+            return;
+        }
+        // Only meaningful if a terminal is installed on this host.
+        let Some((prog, args)) = terminal_command(Path::new("speedtest")) else {
+            return;
+        };
+        match prog.as_str() {
+            "gnome-terminal" => assert_eq!(args, vec!["--".to_string(), "speedtest".into()]),
+            "kitty" => assert_eq!(args, vec!["speedtest".to_string()]),
+            _ => assert_eq!(args, vec!["-e".to_string(), "speedtest".into()]),
+        }
+    }
+
+    #[test]
+    fn autostart_files_name_the_tray_path() {
+        let p = Path::new("/home/u/.local/bin/speedtest-tray");
+        assert!(autostart_desktop(p).contains("/home/u/.local/bin/speedtest-tray"));
+        assert!(autostart_desktop(p).contains("Terminal=false"));
+        let plist = launchagent_plist(p);
+        assert!(plist.contains("/home/u/.local/bin/speedtest-tray"));
+        assert!(plist.contains("<key>RunAtLoad</key>"));
+    }
+}

@@ -56,6 +56,24 @@ sudo mv speedtest-rli-linux-x86_64 /usr/local/bin/speedtest
 On Windows, the `.exe` runs by double-clicking; to call it as `speedtest`
 from any terminal, put it in a folder that is on your `PATH`.
 
+### System tray (optional)
+
+The installers also drop a small tray app that lives in the taskbar and
+starts automatically at login. It has three menu items:
+
+- **Start** — opens a terminal and runs the speedtest.
+- **Update** — downloads the latest release and replaces both the tray and
+  the `speedtest` CLI.
+- **Exit** — quits the tray.
+
+Tray binaries are on the releases page as `speedtest-rli-tray-*`. To disable
+autostart, remove the file the installer created:
+
+- Linux: `~/.config/autostart/speedtest-tray.desktop`
+- macOS: `~/Library/LaunchAgents/com.andreasmlbngaol.speedtest-tray.plist`
+- Windows: delete the `speedtest-tray` value under
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+
 ### From source
 
 Requires a stable Rust toolchain.
@@ -64,10 +82,16 @@ Requires a stable Rust toolchain.
 cargo build --release
 ```
 
-The binary lands at `target/release/speedtest-rli`. Install it with:
+The binary lands at `target/release/speedtest`. Install it with:
 
 ```sh
 cargo install --path .
+```
+
+To build the tray as well:
+
+```sh
+cargo build --release --features tray --bin speedtest-tray
 ```
 
 Or install straight from GitHub:
@@ -137,6 +161,8 @@ speedtest --list
 - `src/transfer.rs` — multithreaded download/upload tests
 - `src/results.rs` — result data, CSV/JSON output, share image
 - `src/http.rs` — HTTP client and request helpers
+- `src/tray_support.rs` — pure helpers for the tray (asset names, terminal launch, autostart)
+- `src/bin/speedtest-tray.rs` — the optional system-tray app (`--features tray`)
 
 The original Python implementation has been removed; this repository is the
 Rust implementation.

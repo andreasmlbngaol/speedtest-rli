@@ -65,8 +65,55 @@ jobs:
           files: ${{ matrix.asset }}
           generate_release_notes: true
 
+  # The tray uses tray-icon's ksni backend on Linux (pure Rust, no GTK/dbus),
+  # so it builds with the same static-musl target as the CLI — no system libs.
+  tray:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            asset: speedtest-rli-tray-linux-x86_64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            asset: speedtest-rli-tray-windows-x86_64.exe
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            asset: speedtest-rli-tray-macos-aarch64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build tray
+        run: cargo build --release --locked --features tray --bin speedtest-tray --target ${{ matrix.target }}
+
+      - name: Rename tray (unix)
+        if: matrix.os != 'windows-latest'
+        run: cp target/${{ matrix.target }}/release/speedtest-tray ${{ matrix.asset }}
+
+      - name: Rename tray (windows)
+        if: matrix.os == 'windows-latest'
+        run: copy target\${{ matrix.target }}\release\speedtest-tray.exe ${{ matrix.asset }}
+
+      - name: Upload tray to release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: ${{ matrix.asset }}
+
   installers:
-    needs: build
+    needs: [build, tray]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

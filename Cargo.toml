@@ -1,6 +1,6 @@
 [package]
 name = "speedtest-rli"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 description = "Command line interface for testing internet bandwidth using speedtest.net"
 license = "Apache-2.0"
@@ -12,6 +12,17 @@ readme = "README.md"
 name = "speedtest"
 path = "src/main.rs"
 
+# Optional system-tray launcher. Built only with `--features tray`, so the
+# plain `speedtest` binary never pulls in any GUI/GTK dependency.
+[[bin]]
+name = "speedtest-tray"
+path = "src/bin/speedtest-tray.rs"
+required-features = ["tray"]
+
+[features]
+default = []
+tray = ["dep:tray-icon", "dep:tao"]
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "gzip", "rustls-tls"] }
@@ -19,6 +30,12 @@ roxmltree = "0.20"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 md5 = "0.7"
+tray-icon = { version = "0.26", optional = true, default-features = false, features = ["ksni"] }
+
+# A GUI event loop is only needed on Windows (message pump) and macOS
+# (main-thread run loop). Linux's ksni backend runs its own D-Bus thread.
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+tao = { version = "0.37", optional = true }
 
 [profile.release]
 lto = true
