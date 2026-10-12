@@ -187,9 +187,9 @@ pub fn terminal_command_for(cmd: &str) -> Option<(String, Vec<String>)> {
     None
 }
 
-/// Terminal command that re-runs this tray binary with `--update`, so the
-/// check-and-install output is visible instead of flashing by in a tooltip.
-pub fn update_terminal_command(tray_exe: &Path) -> Option<(String, Vec<String>)> {
+/// The command line that re-runs the tray binary in update mode. Pure so it can
+/// be tested without a terminal installed.
+pub fn update_command_line(tray_exe: &Path) -> String {
     let exe = tray_exe.to_string_lossy();
     if cfg!(target_os = "windows") {
         // The tray is a GUI-subsystem exe with no console, so its stdout is not
@@ -198,11 +198,16 @@ pub fn update_terminal_command(tray_exe: &Path) -> Option<(String, Vec<String>)>
         // GUI-subsystem process on its own).
         let log = std::env::temp_dir().join("speedtest-update.log");
         let log = log.to_string_lossy();
-        let cmd = format!("start \"\" /wait \"{exe}\" --update > \"{log}\" 2>&1 & type \"{log}\"");
-        return terminal_command_for(&cmd);
+        format!("start \"\" /wait \"{exe}\" --update > \"{log}\" 2>&1 & type \"{log}\"")
+    } else {
+        format!("{} --update", shell_quote(&exe))
     }
-    let cmd = format!("{} --update", shell_quote(&exe));
-    terminal_command_for(&cmd)
+}
+
+/// Terminal command that re-runs this tray binary with `--update`, so the
+/// check-and-install output is visible instead of flashing by in a tooltip.
+pub fn update_terminal_command(tray_exe: &Path) -> Option<(String, Vec<String>)> {
+    terminal_command_for(&update_command_line(tray_exe))
 }
 
 /// Contents of `~/.config/autostart/speedtest-tray.desktop` (Linux).
@@ -353,19 +358,15 @@ mod tests {
     }
 
     #[test]
-    fn update_command_targets_this_exe_with_the_update_flag() {
+    fn update_command_line_targets_this_exe_with_the_update_flag() {
+        let cmd = update_command_line(Path::new("/x/speedtest-tray"));
+        assert!(cmd.contains("--update"), "cmd={cmd}");
         if cfg!(target_os = "windows") {
-            return;
+            assert!(cmd.contains("speedtest-tray"));
+            assert!(cmd.contains("type "));
+        } else {
+            assert!(cmd.contains("'/x/speedtest-tray' --update"), "cmd={cmd}");
         }
-        let (prog, args) = update_terminal_command(Path::new("/x/speedtest-tray")).unwrap();
-        let body_idx = match prog.as_str() {
-            "gnome-terminal" => 1,
-            "kitty" => 0,
-            _ => 1,
-        };
-        let body = &args[body_idx + 2];
-        assert!(body.contains("'/x/speedtest-tray' --update"), "body={body}");
-        assert!(body.contains("read -n1"));
     }
 
     #[test]
