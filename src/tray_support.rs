@@ -85,23 +85,72 @@ fn on_path(program: &str) -> bool {
     std::env::split_paths(&paths).any(|dir| dir.join(program).is_file())
 }
 
-/// Command to open a terminal window that runs `cli`.
+/// Single-quote a string for a POSIX shell, escaping embedded single quotes.
+fn shell_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// Escape a string for embedding inside an AppleScript double-quoted literal.
+fn applescript_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Command to open a terminal window that runs `cli` and then waits for a key,
+/// so the window stays open long enough to read the result.
 ///
 /// Returns `(program, args)` ready for `Command::new(program).args(args)`.
 /// `None` if no suitable terminal could be found.
 pub fn terminal_command(cli: &Path) -> Option<(String, Vec<String>)> {
-    let cli = cli.to_string_lossy().into_owned();
+    let cli = cli.to_string_lossy();
+    let cmd = if cfg!(target_os = "windows") {
+        format!("\"{cli}\"")
+    } else {
+        shell_quote(&cli)
+    };
+    terminal_command_for(&cmd)
+}
 
+/// Like [`terminal_command`] but takes a whole shell command line, so callers
+/// can pass extra arguments (e.g. `speedtest-tray --update`).
+pub fn terminal_command_for(cmd: &str) -> Option<(String, Vec<String>)> {
     if cfg!(target_os = "windows") {
-        // `start` needs an (empty) window-title argument before the command.
+        // `start` needs an (empty) window-title argument before the command;
+        // `pause` in the new window waits for a key before it closes.
         return Some((
             "cmd".into(),
-            vec!["/C".into(), "start".into(), String::new(), cli],
+            vec![
+                "/C".into(),
+                "start".into(),
+                String::new(),
+                "cmd".into(),
+                "/C".into(),
+                format!("{cmd} & pause"),
+            ],
         ));
     }
 
+    // Run the command, then block on a keypress. `bash -c` is invoked explicitly
+    // so `read -n1` is available regardless of the user's login shell.
+    let body = format!(
+        "{cmd}; printf '\\nPress any key to close...'; read -n1 -s -r; printf '\\n'"
+    );
+
     if cfg!(target_os = "macos") {
-        let script = format!("tell application \"Terminal\" to do script \"{cli}\"");
+        let inner = format!("bash -c {}", shell_quote(&body));
+        let script = format!(
+            "tell application \"Terminal\" to do script \"{}\"",
+            applescript_escape(&inner)
+        );
         return Some((
             "osascript".into(),
             vec![
@@ -129,13 +178,31 @@ pub fn terminal_command(cli: &Path) -> Option<(String, Vec<String>)> {
             continue;
         }
         let args = match emu {
-            "gnome-terminal" => vec!["--".into(), cli.clone()],
-            "kitty" => vec![cli.clone()],
-            _ => vec!["-e".into(), cli.clone()],
+            "gnome-terminal" => vec!["--".into(), "bash".into(), "-c".into(), body.clone()],
+            "kitty" => vec!["bash".into(), "-c".into(), body.clone()],
+            _ => vec!["-e".into(), "bash".into(), "-c".into(), body.clone()],
         };
         return Some((emu.into(), args));
     }
     None
+}
+
+/// Terminal command that re-runs this tray binary with `--update`, so the
+/// check-and-install output is visible instead of flashing by in a tooltip.
+pub fn update_terminal_command(tray_exe: &Path) -> Option<(String, Vec<String>)> {
+    let exe = tray_exe.to_string_lossy();
+    if cfg!(target_os = "windows") {
+        // The tray is a GUI-subsystem exe with no console, so its stdout is not
+        // attached to the terminal we spawn. Redirect it to a file and `type` it.
+        // `start /wait` blocks until the update finishes (cmd does not wait for a
+        // GUI-subsystem process on its own).
+        let log = std::env::temp_dir().join("speedtest-update.log");
+        let log = log.to_string_lossy();
+        let cmd = format!("start \"\" /wait \"{exe}\" --update > \"{log}\" 2>&1 & type \"{log}\"");
+        return terminal_command_for(&cmd);
+    }
+    let cmd = format!("{} --update", shell_quote(&exe));
+    terminal_command_for(&cmd)
 }
 
 /// Contents of `~/.config/autostart/speedtest-tray.desktop` (Linux).
@@ -235,7 +302,10 @@ mod tests {
         assert_eq!(args[0], "/C");
         assert_eq!(args[1], "start");
         assert_eq!(args[2], ""); // empty title
-        assert!(args[3].ends_with("speedtest.exe"));
+        // Runs the CLI then pauses so the window stays open.
+        assert!(args[3] == "cmd" && args[4] == "/C");
+        assert!(args[5].contains("speedtest.exe"));
+        assert!(args[5].contains("pause"));
     }
 
     #[test]
@@ -258,11 +328,44 @@ mod tests {
         let Some((prog, args)) = terminal_command(Path::new("speedtest")) else {
             return;
         };
-        match prog.as_str() {
-            "gnome-terminal" => assert_eq!(args, vec!["--".to_string(), "speedtest".into()]),
-            "kitty" => assert_eq!(args, vec!["speedtest".to_string()]),
-            _ => assert_eq!(args, vec!["-e".to_string(), "speedtest".into()]),
+        // Every Linux branch runs `bash -c "<cli>; ... read -n1 ..."`.
+        let body_idx = match prog.as_str() {
+            "gnome-terminal" => {
+                assert_eq!(args[0], "--");
+                1
+            }
+            "kitty" => 0,
+            _ => {
+                assert_eq!(args[0], "-e");
+                1
+            }
+        };
+        assert_eq!(&args[body_idx..body_idx + 2], ["bash", "-c"]);
+        let body = &args[body_idx + 2];
+        assert!(body.contains("speedtest"));
+        assert!(body.contains("read -n1"));
+    }
+
+    #[test]
+    fn shell_quote_escapes_single_quotes() {
+        assert_eq!(shell_quote("plain"), "'plain'");
+        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn update_command_targets_this_exe_with_the_update_flag() {
+        if cfg!(target_os = "windows") {
+            return;
         }
+        let (prog, args) = update_terminal_command(Path::new("/x/speedtest-tray")).unwrap();
+        let body_idx = match prog.as_str() {
+            "gnome-terminal" => 1,
+            "kitty" => 0,
+            _ => 1,
+        };
+        let body = &args[body_idx + 2];
+        assert!(body.contains("'/x/speedtest-tray' --update"), "body={body}");
+        assert!(body.contains("read -n1"));
     }
 
     #[test]

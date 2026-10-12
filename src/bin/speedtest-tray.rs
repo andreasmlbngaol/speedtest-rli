@@ -2,8 +2,12 @@
 //!
 //! Built only with `--features tray` (see Cargo.toml). It has no window: it
 //! shows a tray icon with a Start / Update / Exit menu. Start opens a terminal
-//! running the `speedtest` CLI; Update downloads the latest GitHub release and
-//! swaps in both the CLI and this tray binary; Exit quits.
+//! running the `speedtest` CLI; Update opens a terminal that downloads the
+//! latest GitHub release and swaps in both the CLI and this tray binary; Exit
+//! quits. Both terminals wait for a keypress before closing.
+//!
+//! Passing `--update` runs the update in the foreground and exits, which is how
+//! the Update menu item drives the visible terminal.
 //!
 //! This binary deliberately contains no speedtest logic — it only orchestrates.
 //!
@@ -100,14 +104,23 @@ fn start_speedtest() {
     let _ = Command::new(program).args(args).spawn();
 }
 
+/// Open a terminal window that runs this binary with `--update`, so the
+/// check/download output is visible and the window waits for a key at the end.
+fn update_in_terminal() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some((program, args)) = tray_support::update_terminal_command(&exe) else {
+        return;
+    };
+    let _ = Command::new(program).args(args).spawn();
+}
+
 /// Handle a clicked menu item. Returns `true` if the app should exit.
-fn handle_menu(id: &str, tray: &TrayIcon) -> bool {
+fn handle_menu(id: &str, _tray: &TrayIcon) -> bool {
     match id {
         tray_support::MENU_START => start_speedtest(),
-        tray_support::MENU_UPDATE => {
-            let msg = update();
-            let _ = tray.set_tooltip(Some(&format!("speedtest — {msg}")));
-        }
+        tray_support::MENU_UPDATE => update_in_terminal(),
         tray_support::MENU_EXIT => return true,
         _ => {}
     }
@@ -121,6 +134,12 @@ fn handle_menu(id: &str, tray: &TrayIcon) -> bool {
 /// Linux/BSD: the ksni backend owns its D-Bus thread, so poll the menu channel.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn main() {
+    // `--update` runs the update in this (foreground) process and exits, so the
+    // tray can pop a terminal showing progress. Normal launch starts the tray.
+    if std::env::args().any(|a| a == "--update") {
+        println!("{}", update());
+        return;
+    }
     let tray = build_tray();
     loop {
         if let Ok(event) = MenuEvent::receiver().try_recv()
@@ -138,6 +157,11 @@ fn main() {
     use tao::event::{Event, StartCause};
     use tao::event_loop::{ControlFlow, EventLoopBuilder};
     use tray_icon::TrayIconEvent;
+
+    if std::env::args().any(|a| a == "--update") {
+        println!("{}", update());
+        return;
+    }
 
     enum UserEvent {
         Menu(MenuEvent),

@@ -62,9 +62,10 @@ The installers also drop a small tray app that lives in the taskbar and
 starts automatically at login. It starts running right after install, so you
 do not need to log out first. It has three menu items:
 
-- **Start** — opens a terminal and runs the speedtest.
-- **Update** — downloads the latest release and replaces both the tray and
-  the `speedtest` CLI.
+- **Start** — opens a terminal and runs the speedtest, then waits for a key
+  so the window does not close before you can read the result.
+- **Update** — opens a terminal that checks for the latest release and
+  replaces both the tray and the `speedtest` CLI, then waits for a key.
 - **Exit** — quits the tray.
 
 Tray binaries are on the releases page as `speedtest-rli-tray-*`. To disable
